@@ -10,6 +10,8 @@ from vat import VATLoss
 import data_utils
 import utils
 
+# GradNorm import
+from helpers_train import GradNorm
 
 class Net(nn.Module):
     def __init__(self):
@@ -28,8 +30,11 @@ class Net(nn.Module):
         x = self.fc1(x)
         return x
 
+    def get_last_shared_layer(self):
+        return self.fc1
 
-def train(args, model, device, data_iterators, optimizer):
+
+def train(args, model, device, data_iterators, optimizer, grad_norm_iterator):
     model.train()
     for i in tqdm(range(args.iters)):
         
@@ -53,7 +58,17 @@ def train(args, model, device, data_iterators, optimizer):
         lds = vat_loss(model, x_ul)
         output = model(x_l)
         classification_loss = cross_entropy(output, y_l)
-        loss = classification_loss + args.alpha * lds
+
+        all_losses = torch.stack([lds,classification_loss])
+        loss = torch.sum(model.task_weights * all_losses)
+
+        # store gradient
+        grad_norm_iterator.store_norm(all_losses)
+
+        # update loss weights
+        if i != 0 and i % 100 == 0:
+            grad_norm_iterator.grad_norm_iteration()
+
         loss.backward()
         optimizer.step()
 
@@ -129,7 +144,11 @@ def main():
     model = Net().to(device)
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
 
-    train(args, model, device, data_iterators, optimizer)
+    # GradNorm
+    grad_norm_iterator = GradNorm(model,1.5)
+    model.task_weights = torch.ones(2,device=device)
+
+    train(args, model, device, data_iterators, optimizer, grad_norm_iterator)
     test(model, device, data_iterators)
 
 
